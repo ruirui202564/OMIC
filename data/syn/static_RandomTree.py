@@ -7,25 +7,6 @@ from typing import List, Dict, Tuple, Optional
 
 
 class MultiClassImbalancedStream:
-    """
-    多分类不平衡数据流生成器，支持精确类别分布控制
-
-    改进：使用预先计算的精确数量，确保类别分布严格符合指定比例
-
-    Parameters
-    ----------
-    stream : river数据生成器
-        原始数据流
-    class_ratios : list of float
-        每个类别的比例，总和应为1.0
-    seed : int, optional
-        随机种子
-    exact_distribution : bool, default=True
-        是否使用精确分布（True=精确，False=随机抽样）
-    max_attempts : int, optional
-        防止无限循环的最大尝试次数
-    """
-
     def __init__(self, stream, class_ratios, seed=None, exact_distribution=True, max_attempts=10000):
         self.stream = stream
         self.class_ratios = np.array(class_ratios)
@@ -34,7 +15,6 @@ class MultiClassImbalancedStream:
         self.exact_distribution = exact_distribution
         self.max_attempts = max_attempts
 
-        # 验证class_ratios
         if not np.isclose(np.sum(self.class_ratios), 1.0, atol=1e-3):
             raise ValueError(
                 f"class_ratios must sum to 1.0, got {np.sum(self.class_ratios)}"
@@ -46,14 +26,12 @@ class MultiClassImbalancedStream:
         self.n_classes = len(class_ratios)
         self.stream_iter = iter(self.stream)
 
-        # 统计信息
         self.generated_counts = Counter()
         self.discarded_counts = Counter()
         self.total_generated = 0
 
-        # 精确分布模式的额外变量
-        self.class_schedule = []  # 预先计算的类别序列
-        self.schedule_index = 0  # 当前调度索引
+        self.class_schedule = []
+        self.schedule_index = 0
 
     def __iter__(self):
         return self
@@ -65,15 +43,12 @@ class MultiClassImbalancedStream:
             return self._next_random()
 
     def _next_exact(self):
-        """精确分布模式：从预计算的类别序列中获取目标类别"""
-        # 如果调度序列为空或已用完，抛出异常
         if self.schedule_index >= len(self.class_schedule):
             raise StopIteration("Exact distribution schedule exhausted. Use take(n) to generate samples.")
 
         target_class = self.class_schedule[self.schedule_index]
         self.schedule_index += 1
 
-        # 从原始流中寻找目标类别的样本
         attempts = 0
         while attempts < self.max_attempts:
             try:
@@ -96,7 +71,6 @@ class MultiClassImbalancedStream:
         raise RuntimeError(f"Failed to find class {target_class} after {self.max_attempts} attempts")
 
     def _next_random(self):
-        """随机分布模式：原始实现"""
         attempts = 0
         while attempts < self.max_attempts:
             target_class = self._select_target_class()
@@ -122,7 +96,6 @@ class MultiClassImbalancedStream:
         raise RuntimeError(f"Failed to generate instance after {self.max_attempts} attempts")
 
     def _select_target_class(self):
-        """随机选择目标类别"""
         p = self.rng.rand()
         cumsum = 0.0
 
@@ -134,55 +107,23 @@ class MultiClassImbalancedStream:
         return self.n_classes - 1
 
     def _prepare_exact_schedule(self, n):
-        """
-        准备精确的类别调度序列
-
-        Parameters
-        ----------
-        n : int
-            总样本数
-
-        Returns
-        -------
-        list
-            打乱后的类别序列，确保精确分布
-        """
-        # 计算每个类别的精确数量
         class_counts = np.round(self.class_ratios * n).astype(int)
 
-        # 处理舍入误差：调整总和到n
         diff = n - class_counts.sum()
         if diff != 0:
-            # 找到比例最大的类别进行调整
             adjust_class = np.argmax(self.class_ratios)
             class_counts[adjust_class] += diff
 
-        # 创建类别序列
         schedule = []
         for class_idx, count in enumerate(class_counts):
             schedule.extend([class_idx] * count)
 
-        # 打乱序列（保持随机性但总数精确）
         self.rng.shuffle(schedule)
 
         return schedule
 
     def take(self, n):
-        """
-        生成n个样本（精确分布模式）
-
-        Parameters
-        ----------
-        n : int
-            要生成的样本数量
-
-        Yields
-        ------
-        tuple
-            (x, y) 样本和标签
-        """
         if self.exact_distribution:
-            # 准备精确的类别调度
             self.class_schedule = self._prepare_exact_schedule(n)
             self.schedule_index = 0
 
@@ -194,7 +135,6 @@ class MultiClassImbalancedStream:
             yield next(self)
 
     def get_statistics(self):
-        """获取生成统计信息"""
         total_discarded = sum(self.discarded_counts.values())
         total_processed = self.total_generated + total_discarded
 
@@ -215,7 +155,6 @@ class MultiClassImbalancedStream:
         }
 
     def export_to_excel(self, filepath: str, samples: List[Tuple[dict, int]]):
-        """导出数据到Excel文件（保持原有功能）"""
         if not samples:
             raise ValueError("No samples to export")
 
@@ -228,13 +167,12 @@ class MultiClassImbalancedStream:
         print(f"  - Sheet 'statistics': 详细统计信息")
 
     def _write_data_sheet(self, writer, samples):
-        """写入数据sheet"""
         features_list = []
         labels = []
 
         for x, y in samples:
             features_list.append(x)
-            labels.append(y + 1)  # 类别编号+1，从1开始
+            labels.append(y + 1)
 
         df = pd.DataFrame(features_list)
         df['label'] = labels
@@ -242,7 +180,6 @@ class MultiClassImbalancedStream:
         print(f"  → 数据维度: {df.shape[0]} 行 × {df.shape[1]} 列")
 
     def _write_statistics_sheet(self, writer, samples):
-        """写入统计信息sheet"""
         features_list = [x for x, y in samples]
         labels = [y for x, y in samples]
         df_features = pd.DataFrame(features_list)
@@ -262,7 +199,6 @@ class MultiClassImbalancedStream:
 
         stats_data = []
 
-        # 1. 类别分布统计
         stats_data.append(['=== 类别分布统计 ===', '', '', ''])
         stats_data.append(['类别', '数量', '实际比例(%)', '目标比例(%)'])
 
@@ -282,7 +218,6 @@ class MultiClassImbalancedStream:
 
         stats_data.append(['', '', '', ''])
 
-        # 2. 数值特征统计
         if numeric_features:
             stats_data.append(['=== 数值特征统计 ===', '', '', ''])
             stats_data.append(['特征名', '最小值', '最大值', '平均值', '标准差', '中位数'])
@@ -300,7 +235,6 @@ class MultiClassImbalancedStream:
 
             stats_data.append(['', '', '', '', '', ''])
 
-        # 3. 分类特征统计
         if categorical_features:
             stats_data.append(['=== 分类特征统计 ===', '', '', ''])
             stats_data.append(['特征名', '唯一值数量', '取值分布', ''])
@@ -323,7 +257,6 @@ class MultiClassImbalancedStream:
 
             stats_data.append(['', '', '', ''])
 
-        # 4. 生成过程统计
         stats_data.append(['=== 生成过程统计 ===', '', '', ''])
         gen_stats = self.get_statistics()
 
@@ -354,15 +287,9 @@ class MultiClassImbalancedStream:
         print(f"    • 数值特征: {len(numeric_features)} 个")
         print(f"    • 分类特征: {len(categorical_features)} 个")
 
-
-# ============================================================================
-# 使用示例：对比精确模式 vs 随机模式
-# ============================================================================
-
 if __name__ == "__main__":
     from river import synth
 
-    # 创建原始流
     original_stream = synth.RandomTree(
         seed_tree=42,
         seed_sample=42,
@@ -377,7 +304,7 @@ if __name__ == "__main__":
         stream=original_stream,
         class_ratios=[0.581395, 0.232558, 0.116279, 0.058139, 0.011629],
         seed=123,
-        exact_distribution=True  # 启用精确分布
+        exact_distribution=True
     )
 
     samples_exact = list(stream_exact.take(200000))
